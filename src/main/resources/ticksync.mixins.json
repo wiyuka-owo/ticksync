@@ -1,0 +1,20 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.wiyuka.ticksync.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "ChunkMapAccessor",
+    "ConnectionAccessor",
+    "ListenerAndPacketMixin",
+    "LivingEntityMixin",
+    "MinecraftServerAccessor",
+    "MinecraftServerMixin",
+    "PacketProcessorAccessor",
+    "PacketProcessorMixin",
+    "ServerCommonPacketListenerAccessor"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

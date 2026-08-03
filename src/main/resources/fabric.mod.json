@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "ticksync",
+  "version": "${version}",
+  "name": "TickSync",
+  "description": "Measures the phase relationship between each client's tick grid and the server's tick grid. Sensor-only: observes, never modifies, unless an operator explicitly starts an alignment or a rate spoof.",
+  "authors": [
+    "noryea"
+  ],
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.wiyuka.ticksync.TickSync"
+    ],
+    "client": [
+      "com.wiyuka.ticksync.client.TickSyncClient"
+    ]
+  },
+  "mixins": [
+    "ticksync.mixins.json",
+    {
+      "config": "ticksync.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "fabric-api": "*",
+    "minecraft": "~${minecraft_version}",
+    "java": ">=21"
+  }
+}
