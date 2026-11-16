@@ -9,29 +9,38 @@ import com.wiyuka.ticksync.phase.PhaseMath;
 import com.wiyuka.ticksync.phase.PhaseTracker;
 import com.wiyuka.ticksync.phase.PlayerSession;
 import com.wiyuka.ticksync.phase.RttTracker;
+import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.arguments.EntityArgument;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.network.chat.Style;
+import net.minecraft.network.chat.TextColor;
 import net.minecraft.server.level.ServerPlayer;
 
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Locale;
 
 import static com.wiyuka.ticksync.command.CommandText.clip;
-import static com.wiyuka.ticksync.command.CommandText.drift;
 import static com.wiyuka.ticksync.command.CommandText.fail;
-import static com.wiyuka.ticksync.command.CommandText.ms;
 import static com.wiyuka.ticksync.command.CommandText.ok;
-import static com.wiyuka.ticksync.command.CommandText.pct;
-import static com.wiyuka.ticksync.command.CommandText.perMinute;
-import static com.wiyuka.ticksync.command.CommandText.verdict;
+import static com.wiyuka.ticksync.command.CommandText.send;
 
 final class StatsCommand {
 
-    private static final char EMPTY_BIN = ' ';
     private static final char[] BARS = {'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'};
-    private static final String RULER = "|         |         |         |         |         |";
-    private static final String RULER_LABELS = "0         10        20        30        40        50 ms";
+
+    private static final int COLUMNS = 50;
+
+    private static final int EMPTY = 0x22262A;
+    private static final int SHAPE = 0x4FB3D9;
+    private static final int OUTSIDE = 0x33383D;
+    private static final int BAND = 0x3E5A47;
+    private static final int JITTER = 0x5FA377;
+    private static final int MEAN = 0xF2F2F2;
+    private static final int TARGET = 0xE0A03C;
 
     private StatsCommand() {
     }
@@ -52,118 +61,254 @@ final class StatsCommand {
     }
 
     private static int statsAll(CommandSourceStack source) {
+        TickSync.get().registry().requestSamples();
         Collection<PhaseTracker> all = TickSync.get().registry().all();
         if (all.isEmpty()) {
-            ok(source, "TickSync: 无玩家追踪数据", false);
+            send(source, Component.literal("TickSync: ").withStyle(ChatFormatting.DARK_AQUA)
+                .append(Component.literal("暂无样本，已请求采集").withStyle(ChatFormatting.GRAY)), false);
             return 0;
         }
 
-        StringBuilder sb = new StringBuilder();
-        sb.append("TickSync — 当前追踪 ").append(all.size()).append(" 名玩家\n");
-        sb.append(String.format(Locale.ROOT, "%-16s %5s %8s %8s %6s %6s %10s%n",
-            "玩家", "样本数", "均值", "抖动", "到达率", "堆积", "相位偏移"));
+        header(source, "追踪中", all.size() + " 名玩家");
         for (PhaseTracker tracker : all) {
-            sb.append(String.format(Locale.ROOT, "%-16s %5d %8s %8s %6s %6s %10s%n",
-                clip(tracker.playerName()), tracker.windowCount(),
-                ms(tracker.meanMs()), ms(tracker.sigmaMs()),
-                pct(tracker.coverage()), pct(tracker.doubledRate()),
-                perMinute(tracker.driftMsPerMinute())));
+            send(source, indent()
+                .append(Component.literal(clip(tracker.playerName())).withStyle(ChatFormatting.WHITE))
+                .append(dim("  均值 ")).append(num(tracker.meanMs(), "ms"))
+                .append(dim("  抖动 ")).append(num(tracker.sigmaMs(), "ms"))
+                .append(dim("  到达 ")).append(numPct(tracker.coverage()))
+                .append(dim("  堆积 ")).append(numPct(tracker.doubledRate())), false);
         }
-        ok(source, sb.toString(), false);
         return all.size();
     }
 
     private static int statsOne(CommandSourceStack source, ServerPlayer player) {
+        TickSync.get().registry().requestSamples(player.getUUID());
         PhaseTracker tracker = TickSync.get().registry().get(player.getUUID());
         if (tracker == null) {
-            fail(source, "TickSync: 无玩家 " + player.getName().getString() + " 的追踪数据");
+            fail(source, "TickSync: 正在为 " + player.getName().getString() + " 采样，请稍后查看");
             return 0;
         }
 
-        long total = tracker.accepted() + tracker.discarded();
-        double discardPct = total == 0L ? 0.0 : 100.0 * tracker.discarded() / total;
+        PhaseController controller = TickSync.get().controller();
+        AlignMode mode = controller.mode();
+        double rtt = PhaseBroadcaster.rttMs(player);
+        PhaseController.Band band = controller.bandFor(tracker, rtt);
 
-        StringBuilder sb = new StringBuilder();
-        sb.append("TickSync — ").append(tracker.playerName()).append('\n');
-        sb.append(String.format(Locale.ROOT, "  统计窗口   %d 个样本%n", tracker.windowCount()));
-        sb.append(String.format(Locale.ROOT, "  平均等待   %s%n", ms(tracker.meanMs())));
-        sb.append(String.format(Locale.ROOT, "  网络波动   %s   (%s)%n",
-            ms(tracker.sigmaMs()), verdict(tracker.sigmaMs())));
-        sb.append(String.format(Locale.ROOT, "  延迟范围   %s (p1-p99), 波动下限 %s / 上限 %s%n",
-            ms(tracker.spreadMs()), ms(tracker.lowTailMs()), ms(tracker.highTailMs())));
-        sb.append(String.format(Locale.ROOT, "  分位数     p1 %s   p50 %s   p95 %s   p99 %s%n",
-            ms(tracker.percentileMs(0.01)), ms(tracker.percentileMs(0.5)),
-            ms(tracker.percentileMs(0.95)), ms(tracker.percentileMs(0.99))));
-        sb.append(placement(tracker, player));
-        sb.append(roundTrip(player));
-        sb.append(String.format(Locale.ROOT, "  相位偏移   %s%n", drift(tracker.driftMsPerMinute())));
-        sb.append(String.format(Locale.ROOT, "  样本记录   采纳 %d，丢弃 %d (%.1f%% 无效数据)%n",
-            tracker.accepted(), tracker.discarded(), discardPct));
-        sb.append(histogram(tracker.histogram()));
-
-        ok(source, sb.toString(), false);
+        track(source, tracker, band, mode);
+        sync(source, tracker, player, band, mode, rtt);
         return 1;
     }
 
-    private static String placement(PhaseTracker tracker, ServerPlayer player) {
-        PhaseController controller = TickSync.get().controller();
-        double rtt = PhaseBroadcaster.rttMs(player);
-        PhaseController.Band band = controller.bandFor(tracker, rtt);
-        if (band == null || Double.isNaN(tracker.meanMs())) {
-            return "  落点位置   -\n";
+    private static void track(
+        CommandSourceStack source, PhaseTracker tracker, PhaseController.Band band, AlignMode mode) {
+
+        long total = tracker.accepted() + tracker.discarded();
+        double discard = total == 0L ? 0.0 : 100.0 * tracker.discarded() / total;
+
+        header(source, "相位轨道", String.format(Locale.ROOT,
+            "一个游戏刻 50 ms，%d 样本，%.0f%% 无效", tracker.windowCount(), discard));
+
+        shape(source, tracker.histogram());
+        lane(source, tracker, band, mode);
+
+        send(source, indent()
+            .append(chip(MEAN)).append(dim(" 均值 ")).append(num(tracker.meanMs(), "ms"))
+            .append(Component.literal("    "))
+            .append(chip(JITTER)).append(dim(" 抖动 "))
+            .append(num(tracker.lowTailMs(), "")).append(dim(" 前 / "))
+            .append(num(tracker.highTailMs(), "ms")).append(dim(" 后"))
+            .append(verdict(tracker.sigmaMs())), false);
+
+        if (band != null && !band.isEmpty()) {
+            send(source, indent()
+                .append(chip(TARGET)).append(dim(" 目标 ")).append(num(band.targetFor(mode), "ms"))
+                .append(Component.literal("    "))
+                .append(chip(BAND)).append(dim(" 可用 ")).append(num(band.floorMs(), ""))
+                .append(dim(" ~ ")).append(num(band.ceilingMs(), "ms")), false);
         }
 
-        AlignMode mode = controller.mode();
-        double mean = tracker.meanMs();
-        double returnWait = PhaseMath.returnWaitMs(mean, rtt);
-        double totalWait = mean + returnWait;
-
-        StringBuilder sb = new StringBuilder();
-        sb.append(String.format(Locale.ROOT,
-            "  链路等待   上行 %s + 下行 %s = 合计 %s   (当前处于%s区间，重发临界值 %s，延迟 %s)%n",
-            ms(mean), ms(returnWait), ms(totalWait),
-            totalWait < PhaseMath.PERIOD_MS ? "单刻" : "跨刻", ms(band.cliffMs()), ms(rtt)));
-        sb.append(band.isEmpty()
-            ? String.format(Locale.ROOT,
-                "  可用区间   无可用空间 — 波动范围 %s，区间宽度 %s%n",
-                ms(tracker.lowTailMs() + tracker.highTailMs() + 2.0), ms(band.cliffMs()))
-            : String.format(Locale.ROOT,
-                "  可用区间   %s 至 %s   (上下行可调整余量: %s)%n",
-                ms(band.floorMs()), ms(band.ceilingMs()), ms(band.widthMs())));
-        sb.append(String.format(Locale.ROOT, "  同步配置   %s 模式 — 期望目标上行等待时间为 %s%n",
-            mode.id(), ms(band.targetFor(mode))));
-        return sb.toString();
+        row(source, "相位偏移", drift(tracker.driftMsPerMinute()));
     }
 
-    private static String roundTrip(ServerPlayer player) {
-        PlayerSession session = TickSync.get().registry().session(player.getUUID());
-        if (session == null || !session.rtt().ready()) {
-            return String.format(Locale.ROOT,
-                "  往返延迟   等待探测响应... (暂用原版 ping 值 %d ms)%n",
-                player.connection.latency());
-        }
-        RttTracker rtt = session.rtt();
-        return String.format(Locale.ROOT,
-            "  往返延迟   实测 %s (已剔除渲染等待帧 %s)   (数据采集率 %s，原版 ping 值 %d ms)%n",
-            ms(rtt.rttMs()), ms(rtt.paddingMs()), pct(rtt.fill()), player.connection.latency());
-    }
-
-    private static String histogram(long[] bins) {
+    private static void shape(CommandSourceStack source, long[] bins) {
         long peak = 1L;
         for (long count : bins) {
             peak = Math.max(peak, count);
         }
-        StringBuilder line = new StringBuilder(bins.length);
-        for (long count : bins) {
-            line.append(barFor(count, peak));
+        int width = Math.min(COLUMNS, bins.length);
+        char[] chars = new char[width];
+        int[] colors = new int[width];
+        for (int i = 0; i < width; i++) {
+            if (bins[i] == 0L) {
+                chars[i] = BARS[0];
+                colors[i] = EMPTY;
+            } else {
+                chars[i] = BARS[(int) (bins[i] * (BARS.length - 1) / peak)];
+                colors[i] = SHAPE;
+            }
         }
-        return "  延迟分布 (1 ms / 字符)\n  " + line + "\n  " + RULER + "\n  " + RULER_LABELS + "\n";
+        send(source, indent().append(strip(chars, colors)), false);
     }
 
-    private static char barFor(long count, long peak) {
-        if (count == 0L) {
-            return EMPTY_BIN;
+    private static void lane(
+        CommandSourceStack source, PhaseTracker tracker, PhaseController.Band band, AlignMode mode) {
+
+        char[] chars = new char[COLUMNS];
+        int[] colors = new int[COLUMNS];
+        Arrays.fill(chars, BARS[0]);
+        Arrays.fill(colors, OUTSIDE);
+
+        boolean usable = band != null && !band.isEmpty();
+        if (usable) {
+            paint(colors, band.floorMs(), band.ceilingMs(), BAND);
         }
-        return BARS[(int) (count * (BARS.length - 1) / peak)];
+        double mean = tracker.meanMs();
+        if (!Double.isNaN(mean)) {
+            paint(colors, mean - tracker.lowTailMs(), mean + tracker.highTailMs(), JITTER);
+        }
+        if (usable) {
+            mark(colors, band.targetFor(mode), TARGET);
+        }
+        mark(colors, mean, MEAN);
+
+        send(source, indent().append(strip(chars, colors)), false);
+    }
+
+    private static void paint(int[] colors, double fromMs, double toMs, int color) {
+        if (Double.isNaN(fromMs) || Double.isNaN(toMs)) {
+            return;
+        }
+        int from = (int) Math.floor(fromMs);
+        int span = Math.min(COLUMNS, (int) Math.ceil(toMs) - from + 1);
+        for (int i = 0; i < span; i++) {
+            colors[Math.floorMod(from + i, COLUMNS)] = color;
+        }
+    }
+
+    private static void mark(int[] colors, double ms, int color) {
+        if (!Double.isNaN(ms)) {
+            colors[Math.floorMod((int) Math.floor(ms), COLUMNS)] = color;
+        }
+    }
+
+    private static MutableComponent strip(char[] chars, int[] colors) {
+        MutableComponent out = Component.empty();
+        int start = 0;
+        for (int i = 1; i <= chars.length; i++) {
+            if (i == chars.length || colors[i] != colors[start]) {
+                out.append(Component.literal(new String(chars, start, i - start))
+                    .withStyle(Style.EMPTY.withColor(TextColor.fromRgb(colors[start]))));
+                start = i;
+            }
+        }
+        return out;
+    }
+
+    private static MutableComponent chip(int color) {
+        return Component.literal("▄").withStyle(Style.EMPTY.withColor(TextColor.fromRgb(color)));
+    }
+
+    private static void sync(
+        CommandSourceStack source, PhaseTracker tracker, ServerPlayer player,
+        PhaseController.Band band, AlignMode mode, double rtt) {
+
+        header(source, "链路同步", mode.id() + " 模式");
+
+        PlayerSession session = TickSync.get().registry().session(player.getUUID());
+        RttTracker probe = session == null ? null : session.rtt();
+        if (probe == null || !probe.ready()) {
+            row(source, "往返延迟", Component.literal("探测中").withStyle(ChatFormatting.DARK_GRAY)
+                .append(dim("    原版 ping ")).append(num(player.connection.latency(), "ms")));
+        } else {
+            row(source, "往返延迟", num(probe.rttMs(), "ms")
+                .append(dim("    原版 ping ")).append(num(player.connection.latency(), "ms"))
+                .append(dim("    采信 ")).append(numPct(probe.fill())));
+        }
+
+        if (band == null || Double.isNaN(tracker.meanMs())) {
+            row(source, "可用区间", Component.literal("样本不足").withStyle(ChatFormatting.DARK_GRAY));
+            return;
+        }
+
+        double returnWait = PhaseMath.returnWaitMs(tracker.meanMs(), rtt);
+        double totalWait = tracker.meanMs() + returnWait;
+        boolean single = totalWait < PhaseMath.PERIOD_MS;
+
+        row(source, "链路等待", num(tracker.meanMs(), "").append(dim(" 上行 + "))
+            .append(num(returnWait, "")).append(dim(" 下行 = ")).append(num(totalWait, "ms"))
+            .append(Component.literal("  " + (single ? "单刻" : "跨刻"))
+                .withStyle(single ? ChatFormatting.DARK_GREEN : ChatFormatting.GOLD)));
+
+        if (band.isEmpty()) {
+            row(source, "可用区间", Component.literal("无").withStyle(ChatFormatting.RED)
+                .append(dim("    波动 ")).append(num(tracker.lowTailMs() + tracker.highTailMs() + 2.0, ""))
+                .append(dim(" 超出临界 ")).append(num(band.cliffMs(), "ms")));
+        } else {
+            row(source, "调整余量", num(band.widthMs(), "ms"));
+        }
+    }
+
+    private static void header(CommandSourceStack source, String title, String context) {
+        send(source, Component.empty(), false);
+        send(source, Component.literal("> ").withStyle(ChatFormatting.DARK_GRAY)
+            .append(Component.literal(title).withStyle(ChatFormatting.GOLD))
+            .append(dim("  " + context)), false);
+    }
+
+    private static void row(CommandSourceStack source, String label, MutableComponent value) {
+        send(source, indent()
+            .append(Component.literal(label + "  ").withStyle(ChatFormatting.GRAY))
+            .append(value), false);
+    }
+
+    private static MutableComponent indent() {
+        return Component.literal("   ");
+    }
+
+    private static MutableComponent dim(String text) {
+        return Component.literal(text).withStyle(ChatFormatting.DARK_GRAY);
+    }
+
+    private static MutableComponent num(double value, String unit) {
+        if (Double.isNaN(value)) {
+            return Component.literal("-").withStyle(ChatFormatting.DARK_GRAY);
+        }
+        MutableComponent out = Component.literal(String.format(Locale.ROOT, "%.1f", value))
+            .withStyle(ChatFormatting.WHITE);
+        return unit.isEmpty() ? out : out.append(dim(" " + unit));
+    }
+
+    private static MutableComponent num(int value, String unit) {
+        return Component.literal(String.valueOf(value)).withStyle(ChatFormatting.WHITE)
+            .append(dim(" " + unit));
+    }
+
+    private static MutableComponent numPct(double fraction) {
+        if (Double.isNaN(fraction)) {
+            return Component.literal("-").withStyle(ChatFormatting.DARK_GRAY);
+        }
+        return Component.literal(String.format(Locale.ROOT, "%.0f%%", fraction * 100.0))
+            .withStyle(ChatFormatting.WHITE);
+    }
+
+    private static MutableComponent drift(double msPerMinute) {
+        if (Double.isNaN(msPerMinute)) {
+            return Component.literal("-").withStyle(ChatFormatting.DARK_GRAY)
+                .append(dim("    需要更长的连续样本"));
+        }
+        return Component.literal(String.format(Locale.ROOT, "%+.2f", msPerMinute))
+            .withStyle(ChatFormatting.WHITE).append(dim(" ms/分"));
+    }
+
+    private static MutableComponent verdict(double sigma) {
+        if (Double.isNaN(sigma)) {
+            return dim("    样本不足");
+        }
+        if (sigma < 5.0) {
+            return Component.literal("    稳定").withStyle(ChatFormatting.DARK_GREEN);
+        }
+        return sigma < 12.0
+            ? Component.literal("    有波动").withStyle(ChatFormatting.GOLD)
+            : Component.literal("    波动较大").withStyle(ChatFormatting.RED);
     }
 }

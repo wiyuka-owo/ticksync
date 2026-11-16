@@ -14,15 +14,27 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
 
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class PhaseRegistry {
 
-    private static final int PROBE_INTERVAL_TICKS = 5;
-
     private final Map<UUID, PlayerSession> sessions = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> requestedPlayers = new ConcurrentHashMap<>();
+    private static final long SAMPLE_WINDOW_NANOS = 60_000_000_000L;
+    private volatile long requestedUntil;
+
+    /** Keep the phase window warm for stats, one-shot alignment and timing API queries. */
+    public void requestSamples() {
+        requestedUntil = System.nanoTime() + SAMPLE_WINDOW_NANOS;
+    }
+
+    public void requestSamples(UUID playerId) {
+        requestedPlayers.put(playerId, System.nanoTime() + SAMPLE_WINDOW_NANOS);
+    }
 
     public void attach(ServerGamePacketListenerImpl handler) {
         ServerPlayer player = handler.player;
@@ -57,20 +69,32 @@ public final class PhaseRegistry {
         }
     }
 
-    public void sendRttProbes(MinecraftServer server, int tick) {
-        if (tick % PROBE_INTERVAL_TICKS != 0) {
-            return;
-        }
-        for (PlayerSession session : sessions.values()) {
-            ServerPlayer player = server.getPlayerList().getPlayer(session.playerId());
-            if (player != null) {
-                player.connection.send(new ClientboundPingPacket(session.rtt().nextProbeId()));
+    public void update(MinecraftServer server, boolean allPlayers, Set<UUID> subjects) {
+        long now = System.nanoTime();
+        long until = requestedUntil;
+        allPlayers = allPlayers || (until != 0 && now - until < 0);
+        if (!requestedPlayers.isEmpty()) requestedPlayers.values().removeIf(end -> now - end >= 0);
+        if (!allPlayers && subjects.isEmpty() && requestedPlayers.isEmpty() && sessions.isEmpty()) return;
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            UUID id = player.getUUID();
+            if (allPlayers || subjects.contains(id) || requestedPlayers.containsKey(id)) {
+                if (!sessions.containsKey(id)) attach(player.connection);
+                player.connection.send(new ClientboundPingPacket(sessions.get(id).rtt().nextProbeId()));
+            } else if (sessions.remove(id) != null) {
+                Connection conn = ((ServerCommonPacketListenerAccessor) player.connection).ticksync$connection();
+                Channel channel = ((ConnectionAccessor) conn).ticksync$channel();
+                if (channel != null) channel.eventLoop().execute(() -> {
+                    if (channel.pipeline().get(ArrivalStampHandler.NAME) != null) {
+                        channel.pipeline().remove(ArrivalStampHandler.NAME);
+                    }
+                });
             }
         }
     }
 
     public void detach(UUID playerId) {
         sessions.remove(playerId);
+        requestedPlayers.remove(playerId);
     }
 
     public PlayerSession session(UUID playerId) {
@@ -83,7 +107,7 @@ public final class PhaseRegistry {
     }
 
     public Collection<PhaseTracker> all() {
-        return sessions.values().stream().map(PlayerSession::phase).toList();
+        return sessions.isEmpty() ? List.of() : sessions.values().stream().map(PlayerSession::phase).toList();
     }
 
     public void resetAll() {
@@ -92,6 +116,8 @@ public final class PhaseRegistry {
 
     public void clear() {
         sessions.clear();
+        requestedPlayers.clear();
+        requestedUntil = 0;
     }
 
     public double rttMs(UUID playerId) {

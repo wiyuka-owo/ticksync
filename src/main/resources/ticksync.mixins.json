@@ -3,17 +3,21 @@
   "minVersion": "0.8",
   "package": "com.wiyuka.ticksync.mixin",
   "compatibilityLevel": "JAVA_21",
-  "mixins": [
-    "ChunkMapAccessor",
-    "ConnectionAccessor",
-    "ListenerAndPacketMixin",
-    "LivingEntityMixin",
-    "MinecraftServerAccessor",
-    "MinecraftServerMixin",
-    "PacketProcessorAccessor",
-    "PacketProcessorMixin",
-    "ServerCommonPacketListenerAccessor"
-  ],
+    "mixins": [
+        "AcceptedMoveMixin",
+        "ChunkMapAccessor",
+        "ConnectionAccessor",
+        "ListenerAndPacketMixin",
+        "LivingEntityMixin",
+        "MinecraftServerAccessor",
+        "MinecraftServerMixin",
+        "PacketProcessorAccessor",
+        "PacketProcessorMixin",
+        "PlayerAttackMixin",
+        "ServerEntityMixin",
+        "ServerCommonPacketListenerAccessor",
+        "TrackedEntityAccessor"
+    ],
   "injectors": {
     "defaultRequire": 1
   }

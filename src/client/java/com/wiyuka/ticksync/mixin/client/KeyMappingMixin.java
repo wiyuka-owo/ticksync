@@ -2,8 +2,10 @@ package com.wiyuka.ticksync.mixin.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
 import com.wiyuka.ticksync.client.AttackTrace;
+import com.wiyuka.ticksync.client.PhaseHud;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.RemotePlayer;
 import net.minecraft.world.phys.EntityHitResult;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -15,7 +17,7 @@ public abstract class KeyMappingMixin {
 
     @Inject(method = "set", at = @At("HEAD"))
     private static void ticksync$onKeySet(InputConstants.Key key, boolean held, CallbackInfo ci) {
-        if (!held) {
+        if (!held || !PhaseHud.visible()) {
             return;
         }
         Minecraft mc = Minecraft.getInstance();
@@ -27,10 +29,7 @@ public abstract class KeyMappingMixin {
             return;
         }
 
-        int targetId = -1;
-        if (mc.hitResult instanceof EntityHitResult hit) {
-            targetId = hit.getEntity().getId();
-        }
-        AttackTrace.onAttackKeyPress(targetId, mc.player.getId(), System.nanoTime());
+        var target = mc.hitResult instanceof EntityHitResult hit ? hit.getEntity() : null;
+        AttackTrace.start(target instanceof RemotePlayer remote ? remote : null);
     }
 }

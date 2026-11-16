@@ -4,6 +4,7 @@ import com.wiyuka.ticksync.TickSync;
 import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.wiyuka.ticksync.immediate.GapProcessing;
+import com.wiyuka.ticksync.immediate.FirstMoveSync;
 import com.wiyuka.ticksync.immediate.ImmediateFlush;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -29,6 +30,21 @@ final class LatencyCommand {
                 .executes(ctx -> flushSet(ctx.getSource(), BoolArgumentType.getBool(ctx, "enabled"))));
     }
 
+    static LiteralArgumentBuilder<CommandSourceStack> firstMove() {
+        return Commands.literal("firstmove")
+            .executes(ctx -> firstMoveStatus(ctx.getSource()))
+            .then(Commands.argument("enabled", BoolArgumentType.bool()).executes(ctx -> {
+                TickSync.get().setFirstMove(ctx.getSource().getServer(), BoolArgumentType.getBool(ctx, "enabled"));
+                return firstMoveStatus(ctx.getSource());
+            }));
+    }
+
+    private static int firstMoveStatus(CommandSourceStack source) {
+        ok(source, "提前击退同步 " + (FirstMoveSync.enabled() ? "开启" : "关闭")
+            + "，累计提前同步 " + FirstMoveSync.sent() + " 次", false);
+        return FirstMoveSync.enabled() ? 1 : 0;
+    }
+
     private static int gapStatus(CommandSourceStack source) {
         ok(source, "TickSync: tick 间隙收包处理 [" + (GapProcessing.enabled() ? "已开启" : "已关闭")
             + "]，累计提前处理 " + GapProcessing.drains() + " 次", false);
@@ -38,7 +54,7 @@ final class LatencyCommand {
     private static int gapSet(CommandSourceStack source, boolean enabled) {
         TickSync.get().setGapEnabled(source.getServer(), enabled);
         ok(source, "TickSync: tick 间隙收包处理"
-            + (enabled ? "已开启，入站包到达即处理 (建议同时开启 flush)"
+            + (enabled ? "已开启，入站包到达即处理"
                        : "已关闭，恢复原版处理时序"), true);
         return 1;
     }

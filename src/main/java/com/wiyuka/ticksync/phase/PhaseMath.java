@@ -4,6 +4,8 @@ public final class PhaseMath {
 
     public static final double PERIOD_MS = 50.0;
 
+    public static final double INTERPOLATION_TICKS_EXACT = 2.0;
+
     private PhaseMath() {
     }
 
@@ -33,8 +35,16 @@ public final class PhaseMath {
         return msUntilNextBoundary(rttMs);
     }
 
-    public static int stalenessTicks(double outboundWaitMs, double rttMs) {
-        return (int) Math.ceil((rttMs + outboundWaitMs) / PERIOD_MS);
+    public static double rttTicks(double rttMs) {
+        return rttMs / PERIOD_MS;
+    }
+
+    public static double rewindTicksExact(double rttMs) {
+        return rttTicks(rttMs) + INTERPOLATION_TICKS_EXACT;
+    }
+
+    public static int rewindTicks(double rttMs) {
+        return Math.max(0, (int) Math.round(rewindTicksExact(rttMs)));
     }
 
     public static double walkDistanceMs(double fromMs, double toMs) {

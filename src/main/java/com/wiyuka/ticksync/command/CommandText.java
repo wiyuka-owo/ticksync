@@ -15,6 +15,10 @@ final class CommandText {
         source.sendSuccess(() -> Component.literal(text), broadcast);
     }
 
+    static void send(CommandSourceStack source, Component component, boolean broadcast) {
+        source.sendSuccess(() -> component, broadcast);
+    }
+
     static void fail(CommandSourceStack source, String text) {
         source.sendFailure(Component.literal(text));
     }
@@ -37,9 +41,8 @@ final class CommandText {
 
     static String drift(double msPerMinute) {
         return Double.isNaN(msPerMinute)
-            ? "- (计算需要约 10 分钟连续样本)"
-            : String.format(Locale.ROOT, "%+.3f ms/分 — 偏移 1 刻 (50ms) 约需 %.0f 分钟",
-                msPerMinute, Math.abs(PhaseMath.PERIOD_MS / msPerMinute));
+            ? "- (计算需要连续样本)"
+            : String.format(Locale.ROOT, "%+.3f ms/分", msPerMinute);
     }
 
     static String verdict(double sigma) {

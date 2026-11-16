@@ -35,14 +35,18 @@ public record PlayerTiming(
     }
 
     public int stalenessTicks() {
-        return PhaseMath.stalenessTicks(outboundWaitMs, rttMs);
+        return PhaseMath.rewindTicks(rttMs);
     }
 
     public double stalenessMs() {
         return stalenessTicks() * PhaseMath.PERIOD_MS;
     }
 
-    public int stalenessTicksFor(double arrivalOutboundWaitMs) {
-        return PhaseMath.stalenessTicks(arrivalOutboundWaitMs, rttMs);
+    public double rttTicks() {
+        return PhaseMath.rttTicks(rttMs);
+    }
+
+    public double stalenessTicksExact() {
+        return PhaseMath.rewindTicksExact(rttMs);
     }
 }

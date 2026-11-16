@@ -9,14 +9,27 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.Map;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class PhaseBroadcaster {
 
-    private static final int INTERVAL_TICKS = 2;
-
     private static final Map<UUID, UUID> hudWatch = new ConcurrentHashMap<>();
+    private static final Set<UUID> viewers = ConcurrentHashMap.newKeySet();
+
+    public static void subscribe(UUID viewer, boolean visible) {
+        if (visible) viewers.add(viewer);
+        else viewers.remove(viewer);
+    }
+
+    public static Set<UUID> subjects() {
+        if (viewers.isEmpty() || hudWatch.isEmpty()) return viewers;
+        Set<UUID> subjects = new HashSet<>();
+        for (UUID viewer : viewers) subjects.add(hudSubject(viewer));
+        return subjects;
+    }
 
     private PhaseBroadcaster() {
     }
@@ -34,11 +47,13 @@ public final class PhaseBroadcaster {
     }
 
     public static void discardHud(UUID playerId) {
+        viewers.remove(playerId);
         hudWatch.remove(playerId);
         hudWatch.values().removeIf(subjectId -> subjectId.equals(playerId));
     }
 
     public static void clearHudWatches() {
+        viewers.clear();
         hudWatch.clear();
     }
 
@@ -56,28 +71,20 @@ public final class PhaseBroadcaster {
         return measured >= 0 ? measured : fallback;
     }
 
-    private static UUID resolveSubjectFallingBackToSelf(TickSync mod, ServerPlayer viewer) {
-        UUID subjectId = hudSubject(viewer.getUUID());
-        if (subjectId.equals(viewer.getUUID()) || mod.registry().get(subjectId) != null) {
-            return subjectId;
-        }
-        hudWatch.remove(viewer.getUUID());
-        return viewer.getUUID();
-    }
-
-    public static void broadcast(MinecraftServer server, PhaseController controller, int currentTick) {
-        if (currentTick % INTERVAL_TICKS != 0) {
+    public static void broadcast(MinecraftServer server, PhaseController controller) {
+        if (viewers.isEmpty()) {
             return;
         }
         TickSync mod = TickSync.get();
         if (mod == null) {
             return;
         }
-        for (ServerPlayer viewer : server.getPlayerList().getPlayers()) {
-            if (!ServerPlayNetworking.canSend(viewer, PhaseSnapshotPayload.TYPE)) {
+        for (UUID viewerId : viewers) {
+            ServerPlayer viewer = server.getPlayerList().getPlayer(viewerId);
+            if (viewer == null || !ServerPlayNetworking.canSend(viewer, PhaseSnapshotPayload.TYPE)) {
                 continue;
             }
-            UUID subjectId = resolveSubjectFallingBackToSelf(mod, viewer);
+            UUID subjectId = hudSubject(viewerId);
             PhaseTracker tracker = mod.registry().get(subjectId);
             if (tracker == null) {
                 continue;

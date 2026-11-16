@@ -7,8 +7,10 @@ import com.wiyuka.ticksync.phase.PhaseMath;
 import com.wiyuka.ticksync.phase.PhaseTracker;
 import com.wiyuka.ticksync.phase.PlayerSession;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.phys.Vec3;
 
 import java.util.Optional;
+import java.util.OptionalDouble;
 import java.util.OptionalInt;
 import java.util.UUID;
 
@@ -30,6 +32,7 @@ public final class TickSyncApi {
         if (mod == null) {
             return Optional.empty();
         }
+        mod.registry().requestSamples(playerId);
         PlayerSession session = mod.registry().session(playerId);
         if (session == null) {
             return Optional.empty();
@@ -60,35 +63,68 @@ public final class TickSyncApi {
     }
 
     public static OptionalInt rewindTicksForThisTick(ServerPlayer player) {
-        TickSync mod = TickSync.get();
-        if (mod == null) {
-            return OptionalInt.empty();
-        }
-        PlayerSession session = mod.registry().session(player.getUUID());
-        if (session == null) {
-            return OptionalInt.empty();
-        }
-        double wait = session.phase().lastSampleMs();
-        double rtt = PhaseBroadcaster.rttMs(player.getUUID());
-        if (Double.isNaN(wait) || rtt < 0) {
-            return OptionalInt.empty();
-        }
-        return OptionalInt.of(PhaseMath.stalenessTicks(wait, rtt));
+        OptionalDouble rtt = liveRttTicks(player);
+        return rtt.isPresent()
+            ? OptionalInt.of(PhaseMath.rewindTicks(rtt.getAsDouble() * PhaseMath.PERIOD_MS))
+            : OptionalInt.empty();
     }
 
+    public static OptionalDouble rttTicks(ServerPlayer player) {
+        OptionalDouble live = liveRttTicks(player);
+        if (live.isPresent()) {
+            return live;
+        }
+        return timing(player)
+            .filter(t -> t.confidence().atLeast(Confidence.LOW))
+            .stream()
+            .mapToDouble(PlayerTiming::rttTicks)
+            .findFirst();
+    }
+
+    public static OptionalDouble rewindTicksExact(ServerPlayer player) {
+        OptionalDouble network = rttTicks(player);
+        return network.isPresent()
+            ? OptionalDouble.of(network.getAsDouble() + PhaseMath.INTERPOLATION_TICKS_EXACT)
+            : OptionalDouble.empty();
+    }
+
+    private static OptionalDouble liveRttTicks(ServerPlayer player) {
+        TickSync mod = TickSync.get();
+        if (mod == null) {
+            return OptionalDouble.empty();
+        }
+        mod.registry().requestSamples(player.getUUID());
+        double rtt = PhaseBroadcaster.rttMs(player.getUUID());
+        return rtt < 0 ? OptionalDouble.empty() : OptionalDouble.of(PhaseMath.rttTicks(rtt));
+    }
+
+    public static Optional<Vec3> positionAsSeenBy(ServerPlayer actor, ServerPlayer target) {
+        Optional<StateHistory> history = history();
+        OptionalDouble rewind = rewindTicksExact(actor);
+        if (rewind.isEmpty()) {
+            return Optional.empty();
+        }
+        double ticks = Math.max(0.0, rewind.getAsDouble());
+        return history.flatMap(h -> h.broadcastPositionAt(target.getUUID(), ticks));
+    }
+
+    /** Starts recording on demand. Past ticks become available as server ticks are recorded. */
     public static Optional<StateHistory> history() {
         TickSync mod = TickSync.get();
-        return mod == null ? Optional.empty() : Optional.of(mod.history());
+        if (mod == null) return Optional.empty();
+        mod.history().requestSamples();
+        return Optional.of(mod.history());
     }
 
     public static Optional<TrackedState> asSeenBy(ServerPlayer actor, ServerPlayer target) {
+        Optional<StateHistory> history = history();
         OptionalInt live = rewindTicksForThisTick(actor);
         OptionalInt rewind = live.isPresent() ? live : rewindTicks(actor);
         if (rewind.isEmpty()) {
             return Optional.empty();
         }
         int ticks = rewind.getAsInt();
-        return history().flatMap(h -> h.ticksAgo(target.getUUID(), ticks));
+        return history.flatMap(h -> h.ticksAgo(target.getUUID(), ticks));
     }
 
     private static Confidence confidenceOf(PlayerSession session) {

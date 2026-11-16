@@ -2,6 +2,7 @@ package com.wiyuka.ticksync.history;
 
 import com.wiyuka.ticksync.api.TrackedState;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.phys.Vec3;
 
 import java.util.Optional;
 
@@ -17,9 +18,10 @@ final class PlayerHistory {
         this.states = new TrackedState[depth];
     }
 
-    void record(int tick, ServerPlayer player) {
+    void record(int tick, ServerPlayer player, Vec3 broadcastPosition) {
         states[cursor] = new TrackedState(
-            tick, player.position(), player.getBoundingBox(), player.getYRot(), player.getXRot());
+            tick, player.position(), player.getBoundingBox(), broadcastPosition,
+            player.getYRot(), player.getXRot());
         cursor = (cursor + 1) % depth;
         newestTick = tick;
     }

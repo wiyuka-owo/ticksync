@@ -55,9 +55,10 @@ final class AlignCommand {
     }
 
     private static int alignOne(CommandSourceStack source, ServerPlayer player, boolean force) {
+        TickSync.get().registry().requestSamples(player.getUUID());
         PhaseTracker tracker = TickSync.get().registry().get(player.getUUID());
         if (tracker == null) {
-            fail(source, "TickSync: 无玩家 " + player.getName().getString() + " 的追踪数据");
+            fail(source, "TickSync: 正在为 " + player.getName().getString() + " 采样，请稍后重试");
             return 0;
         }
 
@@ -74,9 +75,10 @@ final class AlignCommand {
     }
 
     private static int alignAll(CommandSourceStack source) {
+        TickSync.get().registry().requestSamples();
         Collection<PhaseTracker> all = TickSync.get().registry().all();
         if (all.isEmpty()) {
-            fail(source, "TickSync: 无玩家追踪数据");
+            fail(source, "TickSync: 暂无样本，已请求采集");
             return 0;
         }
         List<String> report = TickSync.get().controller()

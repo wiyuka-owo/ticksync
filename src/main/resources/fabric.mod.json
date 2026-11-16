@@ -3,7 +3,7 @@
   "id": "ticksync",
   "version": "${version}",
   "name": "TickSync",
-  "description": "Measures the phase relationship between each client's tick grid and the server's tick grid. Sensor-only: observes, never modifies, unless an operator explicitly starts an alignment or a rate spoof.",
+  "description": "Reduces packet and melee knockback latency, with optional phase diagnostics and a compact client HUD.",
   "authors": [
     "noryea"
   ],

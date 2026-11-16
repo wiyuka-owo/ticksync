@@ -1,7 +1,6 @@
 package com.wiyuka.ticksync.command;
 
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
-import com.wiyuka.ticksync.TickSync;
 import com.wiyuka.ticksync.net.PhaseBroadcaster;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -32,10 +31,6 @@ final class HudCommand {
             return 0;
         }
         UUID subjectId = PhaseBroadcaster.hudSubject(viewer.getUUID());
-        if (subjectId.equals(viewer.getUUID())) {
-            ok(source, "TickSync: HUD 服务端面板显示自己", false);
-            return 0;
-        }
         ServerPlayer subject = source.getServer().getPlayerList().getPlayer(subjectId);
         ok(source, "TickSync: HUD 服务端面板正在显示 "
             + (subject != null ? subject.getName().getString() : subjectId.toString()), false);
@@ -57,11 +52,6 @@ final class HudCommand {
         if (viewer == null) {
             return 0;
         }
-        if (TickSync.get().registry().get(subject.getUUID()) == null) {
-            fail(source, "TickSync: 没有 " + subject.getName().getString() + " 的追踪数据");
-            return 0;
-        }
-
         PhaseBroadcaster.setHudWatch(viewer.getUUID(), subject.getUUID());
         ok(source, subject.getUUID().equals(viewer.getUUID())
             ? "TickSync: HUD 服务端面板已切回自己"

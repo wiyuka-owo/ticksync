@@ -7,6 +7,7 @@ import com.wiyuka.ticksync.TickSync;
 import com.wiyuka.ticksync.control.AlignMode;
 import com.wiyuka.ticksync.control.PhaseController;
 import com.wiyuka.ticksync.immediate.GapProcessing;
+import com.wiyuka.ticksync.immediate.FirstMoveSync;
 import com.wiyuka.ticksync.immediate.ImmediateFlush;
 import net.minecraft.server.MinecraftServer;
 
@@ -20,8 +21,10 @@ public final class TickSyncConfig {
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
-    public boolean gap;
+    public boolean gap = true;
     public boolean flush = true;
+    public boolean firstMove = true;
+    public boolean diagnostics;
     public boolean autoAlign;
     public String mode = AlignMode.C2S.id();
 
@@ -66,6 +69,7 @@ public final class TickSyncConfig {
     public void apply(PhaseController controller) {
         GapProcessing.setEnabled(gap);
         ImmediateFlush.setEnabled(flush);
+        FirstMoveSync.setEnabled(firstMove);
         controller.setAuto(autoAlign);
         AlignMode resolved = AlignMode.byId(mode);
         controller.setMode(resolved == null ? AlignMode.C2S : resolved);
@@ -74,6 +78,8 @@ public final class TickSyncConfig {
     public void readFrom(TickSyncConfig other) {
         gap = other.gap;
         flush = other.flush;
+        firstMove = other.firstMove;
+        diagnostics = other.diagnostics;
         autoAlign = other.autoAlign;
         mode = other.mode;
     }
@@ -81,6 +87,7 @@ public final class TickSyncConfig {
     public void readFrom(PhaseController controller) {
         gap = GapProcessing.enabled();
         flush = ImmediateFlush.enabled();
+        firstMove = FirstMoveSync.enabled();
         autoAlign = controller.auto();
         mode = controller.mode().id();
     }

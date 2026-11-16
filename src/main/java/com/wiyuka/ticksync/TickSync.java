@@ -6,12 +6,16 @@ import com.wiyuka.ticksync.control.AlignMode;
 import com.wiyuka.ticksync.control.PhaseController;
 import com.wiyuka.ticksync.history.StateHistory;
 import com.wiyuka.ticksync.immediate.GapProcessing;
+import com.wiyuka.ticksync.immediate.FirstMoveSync;
 import com.wiyuka.ticksync.immediate.ImmediateFlush;
+import com.wiyuka.ticksync.net.GhostBoxPayload;
+import com.wiyuka.ticksync.net.HudSubscriptionPayload;
 import com.wiyuka.ticksync.net.PhaseBroadcaster;
 import com.wiyuka.ticksync.net.PhaseSnapshotPayload;
 import com.wiyuka.ticksync.phase.PhaseRegistry;
 import com.wiyuka.ticksync.phase.PhaseTracker;
 import com.wiyuka.ticksync.ratespoof.RateSpoofManager;
+import com.wiyuka.ticksync.viz.GhostViz;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -19,6 +23,7 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.server.MinecraftServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,6 +38,7 @@ public final class TickSync implements ModInitializer {
     private static final long NOMINAL_TICK_NANOS = 50_000_000L;
 
     private static final long GRID_TOLERANCE_NANOS = 5_000_000L;
+    private static final int PROBE_INTERVAL_TICKS = 5;
 
     private static TickSync instance;
 
@@ -57,6 +63,12 @@ public final class TickSync implements ModInitializer {
     public void setFlushEnabled(MinecraftServer server, boolean enabled) {
         ImmediateFlush.setEnabled(enabled);
         config.flush = enabled;
+        config.save(server);
+    }
+
+    public void setFirstMove(MinecraftServer server, boolean enabled) {
+        FirstMoveSync.setEnabled(enabled);
+        config.firstMove = enabled;
         config.save(server);
     }
 
@@ -103,16 +115,22 @@ public final class TickSync implements ModInitializer {
         instance = this;
 
         PayloadTypeRegistry.playS2C().register(PhaseSnapshotPayload.TYPE, PhaseSnapshotPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(GhostBoxPayload.TYPE, GhostBoxPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(HudSubscriptionPayload.TYPE, HudSubscriptionPayload.STREAM_CODEC);
+        ServerPlayNetworking.registerGlobalReceiver(HudSubscriptionPayload.TYPE,
+            (payload, context) -> PhaseBroadcaster.subscribe(context.player().getUUID(), payload.visible()));
 
         ServerTickEvents.START_SERVER_TICK.register(this::onTickStart);
+        ServerTickEvents.END_SERVER_TICK.register(this::onTickEnd);
 
-        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> registry.attach(handler));
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
             UUID id = handler.player.getUUID();
             controller.release(server, handler.player);
             rateSpoof.release(server, handler.player);
             registry.detach(id);
             history.detach(id);
+            FirstMoveSync.discard(id);
+            GhostViz.disable(id);
             PhaseBroadcaster.discardHud(id);
         });
 
@@ -133,6 +151,8 @@ public final class TickSync implements ModInitializer {
             controller.cancelAll(server);
             registry.clear();
             history.clear();
+            FirstMoveSync.setEnabled(false);
+            GhostViz.clear();
             PhaseBroadcaster.clearHudWatches();
         });
 
@@ -152,17 +172,25 @@ public final class TickSync implements ModInitializer {
 
         int tick = server.getTickCount();
 
-        for (PhaseTracker tracker : registry.all()) {
+        boolean probeTick = tick % PROBE_INTERVAL_TICKS == 0;
+        if (probeTick) {
+            registry.update(server, config.diagnostics || controller.auto(), PhaseBroadcaster.subjects());
+        }
+        var trackers = registry.all();
+        for (PhaseTracker tracker : trackers) {
             tracker.drain(now, gridClean);
         }
 
-        history.tick(server, tick);
-
         tickStartNanos = now;
-        registry.sendRttProbes(server, tick);
         rateSpoof.tick(server, tick);
-        controller.tick(server, registry.all(), tick);
-        PhaseBroadcaster.broadcast(server, controller, tick);
+        controller.tick(server, trackers, tick);
+        if (probeTick) PhaseBroadcaster.broadcast(server, controller);
+    }
+
+    private void onTickEnd(MinecraftServer server) {
+        FirstMoveSync.expire();
+        history.tick(server, server.getTickCount(), config.diagnostics || GhostViz.active());
+        GhostViz.tick(server, history);
     }
 
 }

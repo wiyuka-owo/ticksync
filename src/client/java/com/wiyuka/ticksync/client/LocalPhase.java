@@ -1,101 +1,73 @@
 package com.wiyuka.ticksync.client;
 
-import com.wiyuka.ticksync.TickSync;
 import com.wiyuka.ticksync.mixin.ConnectionAccessor;
-import com.wiyuka.ticksync.mixin.client.ClientListenerConnectionAccessor;
 import com.wiyuka.ticksync.phase.PhaseTracker;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelPipeline;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.multiplayer.ClientPacketListener;
-import net.minecraft.client.multiplayer.PlayerInfo;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import net.minecraft.network.Connection;
+import net.minecraft.network.protocol.game.ClientboundBundlePacket;
+import net.minecraft.network.protocol.game.ClientboundMoveEntityPacket;
+import net.minecraft.network.protocol.game.ClientboundRotateHeadPacket;
+import net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket;
 
 import java.util.UUID;
 
-public final class LocalPhase {
+/** Local tick estimate for a visible timeline on servers without phase snapshots. */
+final class LocalPhase extends ChannelInboundHandlerAdapter {
+    private static LocalPhase active;
+    private final Channel channel;
+    private final PhaseTracker tracker = new PhaseTracker(new UUID(0, 0), "local");
+    private long lastArrival, lastMarker;
 
-    private static final UUID LOCAL = new UUID(0L, 0L);
-
-    private static volatile PhaseTracker tracker;
-
-    private LocalPhase() {
+    private LocalPhase(Channel channel) {
+        this.channel = channel;
     }
 
-    public static PhaseTracker tracker() {
-        return tracker;
-    }
-
-    static void record(long arrivalNanos) {
-        PhaseTracker current = tracker;
-        if (current != null) {
-            current.recordArrival(arrivalNanos);
+    static void update(Connection connection) {
+        Channel channel = connection == null ? null : ((ConnectionAccessor) connection).ticksync$channel();
+        if (active != null && active.channel != channel) {
+            LocalPhase old = active;
+            active = null;
+            old.channel.eventLoop().execute(() -> {
+                if (old.channel.pipeline().context(old) != null) old.channel.pipeline().remove(old);
+            });
         }
-    }
-
-    public static int rttMs() {
-        Minecraft client = Minecraft.getInstance();
-        ClientPacketListener connection = client.getConnection();
-        if (connection == null || client.player == null) {
-            return -1;
+        if (channel == null) return;
+        if (active == null) {
+            LocalPhase sampler = new LocalPhase(channel);
+            active = sampler;
+            channel.eventLoop().execute(() -> {
+                var handler = channel.pipeline().context(connection);
+                if (handler != null) channel.pipeline().addBefore(handler.name(), null, sampler);
+            });
         }
-        PlayerInfo info = connection.getPlayerInfo(client.player.getUUID());
-        return info == null ? -1 : info.getLatency();
+        active.tracker.drain(System.nanoTime(), true);
     }
 
-    public static void attach(ClientPacketListener handler) {
-        tracker = new PhaseTracker(LOCAL, "local");
-        try {
-            Connection connection = ((ClientListenerConnectionAccessor) handler).ticksync$connection();
-            Channel channel = ((ConnectionAccessor) connection).ticksync$channel();
-            if (channel == null) {
-                TickSync.LOGGER.warn("No channel on this connection; local phase measurement disabled");
-                return;
+    static double waitMs() {
+        return active == null ? Double.NaN : active.tracker.livePhaseMs();
+    }
+
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        if (isMarker(msg)) {
+            long now = System.nanoTime();
+            if ((lastArrival == 0 || now - lastArrival > 8_000_000L)
+                && (lastMarker == 0 || now - lastMarker > 25_000_000L)) {
+                tracker.recordArrival(now);
+                lastMarker = now;
             }
-            channel.eventLoop().execute(() -> install(channel, connection));
-        } catch (Throwable t) {
-            TickSync.LOGGER.error("Could not reach the connection; local phase measurement disabled", t);
+            lastArrival = now;
         }
+        super.channelRead(ctx, msg);
     }
 
-    private static void install(Channel channel, Connection connection) {
-        try {
-            ChannelPipeline pipeline = channel.pipeline();
-            ChannelHandlerContext ctx = pipeline.context(connection);
-            if (pipeline.get(ServerTickStampHandler.NAME) == null) {
-                ServerTickStampHandler stamper = new ServerTickStampHandler();
-                if (ctx != null) {
-                    pipeline.addBefore(ctx.name(), ServerTickStampHandler.NAME, stamper);
-                } else {
-                    TickSync.LOGGER.warn("Connection not found in its own pipeline; appending stamper at the end");
-                    pipeline.addLast(ServerTickStampHandler.NAME, stamper);
-                }
-            }
-            if (pipeline.get(AttackTraceHandler.NAME) == null) {
-                AttackTraceHandler attack = new AttackTraceHandler();
-                ChannelHandlerContext again = pipeline.context(connection);
-                if (again != null) {
-                    pipeline.addBefore(again.name(), AttackTraceHandler.NAME, attack);
-                } else {
-                    pipeline.addLast(AttackTraceHandler.NAME, attack);
-                }
-            }
-            TickSync.LOGGER.info("Local phase handlers installed on {}", pipeline.names());
-        } catch (Throwable t) {
-            TickSync.LOGGER.error("Failed to install client netty handlers", t);
+    private static boolean isMarker(Object packet) {
+        if (packet instanceof ClientboundBundlePacket bundle) {
+            for (var child : bundle.subPackets()) if (isMarker(child)) return true;
         }
-    }
-
-    public static void detach() {
-        tracker = null;
-        AttackTrace.clear();
-    }
-
-    public static void onTickStart() {
-        PhaseTracker current = tracker;
-        if (current != null) {
-            current.drain(System.nanoTime(), true);
-        }
+        return packet instanceof ClientboundMoveEntityPacket || packet instanceof ClientboundRotateHeadPacket
+            || packet instanceof ClientboundSetEntityDataPacket;
     }
 }
